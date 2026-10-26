@@ -49,6 +49,28 @@ fi
 # $5 => supports_shared_libraries
 # $6 => native_c_libraries
 
+# When cross-compiling, configure looks for binutils named after the
+# canonical target triple (e.g. aarch64-unknown-none-ranlib) and falls back
+# to the host's own if there are none. The host's are wrong on hosts whose
+# binutils do not handle the target's object format (macOS, for ELF), so use
+# the tools named like the C compiler instead (e.g. aarch64-solo5-ocaml-gcc
+# comes with aarch64-solo5-ocaml-ranlib), when they exist.
+case "$1" in
+  *-gcc|*-cc)
+    tool_prefix="${1%cc}"
+    tool_prefix="${tool_prefix%g}"
+    if command -v "${tool_prefix}ranlib" > /dev/null 2>&1; then
+      export AR="${tool_prefix}ar" RANLIB="${tool_prefix}ranlib" \
+        NM="${tool_prefix}nm" STRIP="${tool_prefix}strip"
+    fi
+    ;;
+esac
+
+# On macOS, leave room to rewrite the shared library's install name below.
+if [ "$5" = "true" ] && [ "$(uname -s)" = "Darwin" ]; then
+  export LDFLAGS="${LDFLAGS:-} -Wl,-headerpad_max_install_names"
+fi
+
 ac_cv_func_obstack_vprintf=no \
 ac_cv_func_localeconv=no \
 ./configure --host="$3" --build="$2" ABI=64 CC="$1" CPPFLAGS="$4" LIBS="$6" $SHARED_LIBRARY_ARG
@@ -70,7 +92,14 @@ if [ "$5" = "true" ]; then
       fi
     done
     # depending on if the host is macos or not
-    cp "$libgmp" ../dllgmp.so || cp .libs/libgmp.dylib ../dllgmp.so
+    if ! cp "$libgmp" ../dllgmp.so 2>/dev/null; then
+      cp .libs/libgmp.dylib ../dllgmp.so
+      # The dylib's install name is the configure prefix (/usr/local/lib),
+      # where nothing will be installed. Point it at the file itself, so
+      # that executables linked against it during the build (such as
+      # generators run as build steps) can load it.
+      install_name_tool -id "$(cd .. && pwd)/dllgmp.so" ../dllgmp.so
+    fi
 else
     touch ../dllgmp.so
 fi
